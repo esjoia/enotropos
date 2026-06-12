@@ -1,0 +1,7 @@
+pymupdf4llm
+fasttext-langdetect
+chromadb
+openai
+streamlit
+python-dotenv
+tqdm

@@ -1,0 +1,36 @@
+# OS files
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Machine-local paths
+corpus_path.txt
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Data output
+data/
+
+# Streamlit
+.streamlit/
+
+# IDE
+.vscode/
+.idea/
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
