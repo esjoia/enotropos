@@ -9,9 +9,11 @@ import logging
 import time
 from typing import Any
 
+from openai import OpenAI
+
 from winegpt.config import (
-    EMBEDDING_BATCH_SIZE,
     EMBEDDING_BASE_URL,
+    EMBEDDING_BATCH_SIZE,
     EMBEDDING_MODEL,
     JINA_API_KEY,
 )
@@ -20,8 +22,6 @@ logger = logging.getLogger(__name__)
 
 
 def get_client() -> OpenAI:
-    from openai import OpenAI
-
     if not JINA_API_KEY:
         raise ValueError("JINA_API_KEY not set in .env")
     return OpenAI(base_url=EMBEDDING_BASE_URL, api_key=JINA_API_KEY)

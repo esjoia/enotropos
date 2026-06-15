@@ -6,7 +6,6 @@ using fasttext-langdetect (ftlangdetect).
 import json
 import logging
 from pathlib import Path
-from typing import Any
 
 from winegpt.config import EXTRACTED_DIR, LANG_DETECT_CHAR_LIMIT
 

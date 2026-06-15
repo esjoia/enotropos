@@ -22,7 +22,7 @@ HEADING_RE = re.compile(r"^#{2,4}\s+(.+)$", re.MULTILINE)
 MIN_CHUNK_CHARS = 150
 
 # Heading text to ignore (page markers, not real sections)
-_IGNORE_HEADINGS_RE: re.Pattern | None = None
+_IGNORE_HEADINGS_RE: re.Pattern[str] | None = None
 
 
 def _ignore_heading(heading: str) -> bool:
@@ -64,7 +64,6 @@ def chunk_by_headings(markdown: str) -> list[dict[str, str]]:
 
 def chunk_by_paragraphs(text: str) -> list[dict[str, str]]:
     """Fallback chunking: split by paragraphs with overlap."""
-    max_chars = CHUNK_SIZE_TOKENS * CHARS_PER_TOKEN
     overlap_chars = CHUNK_OVERLAP_TOKENS * CHARS_PER_TOKEN
 
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
@@ -127,7 +126,7 @@ def process_json(json_path: Path, source_info: dict[str, str]) -> list[dict[str,
             continue
 
         records.append({
-            "chunk_id": f"{source_info['folder']}__{i}",
+            "chunk_id": f"{source_info['folder']}__{source_info['pdf']}__{i}",
             "folder": source_info["folder"],
             "source_file": source_info["pdf"],
             "country": source_info.get("country", data.get("country", "")),

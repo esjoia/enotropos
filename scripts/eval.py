@@ -13,15 +13,13 @@ from __future__ import annotations
 import json
 import logging
 import re
-import statistics
-import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from openai import OpenAI
 
-from winegpt.config import LLM_BASE_URL, LLM_MODEL, OPENCODE_GO_API_KEY
-from winegpt.embed import embed_texts
+from winegpt.config import LLM_MODEL
+from winegpt.llm import get_llm_client
 from winegpt.rag import query_rag
 
 logger = logging.getLogger(__name__)
@@ -30,37 +28,25 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 EVAL_PATH = Path(__file__).resolve().parent.parent / "data" / "eval_questions.json"
 
 
-def get_llm_client():
-    from openai import OpenAI
-
-    return OpenAI(base_url=LLM_BASE_URL, api_key=OPENCODE_GO_API_KEY)
-
-
 def _extract_json(raw: str) -> Any:
     """Robust JSON extraction from LLM output (handles markdown fences)."""
     raw = raw.strip()
     if raw.startswith("```"):
         lines = raw.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [line for line in lines if not line.strip().startswith("```")]
         raw = "\n".join(lines)
     elif "```json" in raw:
         raw = raw.split("```json", 1)[1].split("```", 1)[0]
     return json.loads(raw)
 
 
-def cosine_similarity(a: list[float], b: list[float]) -> float:
-    da = sum(x * x for x in a) ** 0.5
-    db = sum(x * x for x in b) ** 0.5
-    if da == 0 or db == 0:
-        return 0.0
-    return sum(x * y for x, y in zip(a, b)) / (da * db)
-
-
 # ---------------------------------------------------------------------------
 # Metric 1: Faithfulness
 # ---------------------------------------------------------------------------
 
-FAITHFULNESS_PROMPT = """Extract all factual claims from the answer below. For each claim, decide whether the context SUPPORTS or CONTRADICTS it, or if the context is UNVERIFIABLE.
+FAITHFULNESS_PROMPT = """Extract all factual claims from the answer below. \
+For each claim, decide whether the context SUPPORTS or CONTRADICTS it, \
+or if the context is UNVERIFIABLE.
 
 Context:
 {context}
@@ -68,12 +54,13 @@ Context:
 Answer:
 {answer}
 
-Return a JSON list. Each item must have: "claim", "verdict" (one of: SUPPORTED, CONTRADICTED, UNVERIFIABLE).
+Return a JSON list. Each item must have: \
+"claim", "verdict" (one of: SUPPORTED, CONTRADICTED, UNVERIFIABLE).
 
 JSON:"""
 
 
-def compute_faithfulness(answer: str, contexts: list[str], client) -> float:
+def compute_faithfulness(answer: str, contexts: list[str], client: OpenAI) -> float:
     context_text = "\n\n---\n\n".join(contexts)
     # Truncate context to ~3000 chars to avoid token limits
     if len(context_text) > 3000:
@@ -124,7 +111,7 @@ Answer: {answer}
 Return only a single integer (1-5)."""
 
 
-def compute_answer_relevancy(question: str, answer: str, client) -> float:
+def compute_answer_relevancy(question: str, answer: str, client: OpenAI) -> float:
     prompt = ANSWER_RELEVANCY_PROMPT.format(question=question, answer=answer)
 
     try:
@@ -150,7 +137,8 @@ def compute_answer_relevancy(question: str, answer: str, client) -> float:
 # Metric 3: Context Relevancy
 # ---------------------------------------------------------------------------
 
-CONTEXT_RELEVANCY_PROMPT = """Rate how relevant each context passage is to the question on a scale from 1 to 3.
+CONTEXT_RELEVANCY_PROMPT = """Rate how relevant each context passage is to the question \
+on a scale from 1 to 3.
 - 1: not relevant
 - 2: somewhat relevant
 - 3: highly relevant
@@ -165,7 +153,7 @@ Return a JSON list of objects with: "passage" (first 60 chars of the passage), "
 JSON:"""
 
 
-def compute_context_relevancy(question: str, contexts: list[str], client) -> float:
+def compute_context_relevancy(question: str, contexts: list[str], client: OpenAI) -> float:
     # Format numbered contexts (truncated)
     parts = []
     for i, ctx in enumerate(contexts, 1):
@@ -208,7 +196,7 @@ def compute_context_relevancy(question: str, contexts: list[str], client) -> flo
         return 0.0
     # Normalize 1-3 to 0-1
     normalized = [(v - 1) / 2.0 for v in values]
-    return statistics.mean(normalized)
+    return float(sum(normalized) / len(normalized))
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +206,7 @@ def compute_context_relevancy(question: str, contexts: list[str], client) -> flo
 
 def load_eval_questions() -> list[dict[str, str]]:
     with open(EVAL_PATH, encoding="utf-8") as f:
-        return json.load(f)
+        return cast(list[dict[str, str]], json.load(f))
 
 
 def run_eval(limit: int = 0) -> dict[str, Any]:
@@ -275,7 +263,7 @@ def run_eval(limit: int = 0) -> dict[str, Any]:
         )
 
     means = {
-        metric: round(statistics.mean(scores), 3) if scores else 0.0
+        metric: round(sum(scores) / len(scores), 3) if scores else 0.0
         for metric, scores in results.items()
     }
 

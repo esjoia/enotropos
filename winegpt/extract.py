@@ -6,6 +6,7 @@ Markdown + JSON from each PDF using pymupdf4llm (Smart Hybrid OCR).
 import argparse
 import json
 import logging
+import re as _re
 import sys
 from pathlib import Path
 from typing import Any
@@ -23,8 +24,6 @@ from winegpt.config import (
 logger = logging.getLogger(__name__)
 
 # ---- Markdown cleaning patterns ----
-
-import re as _re
 
 _PICTURE_RE = _re.compile(r"\*\*==> picture .+? intentionally omitted <==\*\*", _re.IGNORECASE)
 _PAGE_NUMBER_RE = _re.compile(r"^\s*-\s*\d+\s*-\s*$", _re.MULTILINE)

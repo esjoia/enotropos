@@ -2,7 +2,7 @@
 from winegpt.chunk import chunk_by_headings, chunk_by_paragraphs, chunk_markdown
 
 
-def test_chunk_by_headings_basic():
+def test_chunk_by_headings_basic() -> None:
     md = "## Zona geografica\n\nContingut de la zona.\n\n## Varietats\n\nTempranillo i Garnacha."
     chunks = chunk_by_headings(md)
     assert len(chunks) == 2
@@ -12,7 +12,7 @@ def test_chunk_by_headings_basic():
     assert "Tempranillo" in chunks[1]["markdown"]
 
 
-def test_chunk_by_headings_subheadings():
+def test_chunk_by_headings_subheadings() -> None:
     md = "## Zone\nContent.\n\n### Subzone\n\nMore content."
     chunks = chunk_by_headings(md)
     assert len(chunks) == 2
@@ -20,13 +20,13 @@ def test_chunk_by_headings_subheadings():
     assert chunks[1]["section"] == "Subzone"
 
 
-def test_chunk_by_headings_empty():
+def test_chunk_by_headings_empty() -> None:
     md = "No headings here.\n\nJust text."
     chunks = chunk_by_headings(md)
     assert len(chunks) == 0
 
 
-def test_chunk_markdown_heading():
+def test_chunk_markdown_heading() -> None:
     """Should prefer heading-based chunking when headings exist."""
     md = "## Section 1\n\nText one.\n\n## Section 2\n\nText two."
     chunks = chunk_markdown(md)
@@ -35,7 +35,7 @@ def test_chunk_markdown_heading():
     assert chunks[1]["section"] == "Section 2"
 
 
-def test_chunk_markdown_fallback_paragraphs():
+def test_chunk_markdown_fallback_paragraphs() -> None:
     """Should fall back to paragraph chunking when no headings exist."""
     md = "Paragraph one.\n\nParagraph two.\n\nParagraph three."
     chunks = chunk_markdown(md)
@@ -43,7 +43,7 @@ def test_chunk_markdown_fallback_paragraphs():
     assert chunks[0]["section"] == "General"
 
 
-def test_chunk_by_paragraphs_basic():
+def test_chunk_by_paragraphs_basic() -> None:
     text = "First paragraph.\n\nSecond paragraph."
     chunks = chunk_by_paragraphs(text)
     assert len(chunks) == 1

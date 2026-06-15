@@ -15,13 +15,12 @@ import re
 from typing import Any
 
 from winegpt.config import (
-    LLM_BASE_URL,
     LLM_MODEL,
-    OPENCODE_GO_API_KEY,
     SYSTEM_PROMPT,
     TOP_K_CHUNKS,
 )
 from winegpt.embed import embed_texts
+from winegpt.llm import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +40,9 @@ def _extract_gi_name(query: str) -> str | None:
     for i, part in enumerate(parts):
         # Keep if starts with uppercase OR is a known connector (de, del, los, etc.)
         is_upper = part[0].isupper() if part else False
-        is_connector = part.lower() in {"de", "del", "dels", "los", "las", "la", "el", "y", "i", "d"}
+        is_connector = part.lower() in {
+            "de", "del", "dels", "los", "las", "la", "el", "y", "i", "d",
+        }
         if i == 0 and not is_upper:
             return None  # First word must be proper noun
         if is_upper or is_connector:
@@ -68,10 +69,10 @@ def _rerank_chunks(
 
     # Extract meaningful keywords from query (words > 3 chars, not stop words)
     _stop_words = {
-        "que", "quines", "quins", "quin", "quina", "quina",
+        "que", "quines", "quins", "quin", "quina",
         "son", "esta", "estan", "amb", "per", "de", "la", "el", "els",
         "les", "a", "en", "d", "i", "o", "es", "una", "un", "uns",
-        "unes", "del", "dels", "com", "que", "qui", "se", "ens",
+        "unes", "del", "dels", "com", "qui", "se", "ens",
         "what", "is", "the", "are", "of", "in", "to", "for", "and",
     }
     query_words = [w.lower() for w in re.findall(r"[a-zA-Zà-üÀ-Ü]{4,}", query)]
@@ -173,14 +174,6 @@ def _rerank_chunks(
     return [c for _, c in scored[:top_k]]
 
 
-def get_llm_client() -> OpenAI:
-    from openai import OpenAI
-
-    if not OPENCODE_GO_API_KEY:
-        raise ValueError("OPENCODE_GO_API_KEY not set in .env")
-    return OpenAI(base_url=LLM_BASE_URL, api_key=OPENCODE_GO_API_KEY)
-
-
 def build_context(query: str, context_chunks: list[dict[str, Any]]) -> tuple[str, str]:
     """Build context text and full prompt from retrieved chunks.
 
@@ -189,7 +182,10 @@ def build_context(query: str, context_chunks: list[dict[str, Any]]) -> tuple[str
     context_parts: list[str] = []
     for i, chunk in enumerate(context_chunks, 1):
         meta = chunk["metadata"]
-        src = f"[{i}] {meta.get('gi_name', '?')} ({meta.get('gi_type', '?')}) — {meta.get('section', '?')} — {meta.get('source_file', '?')}"
+        src = (
+            f"[{i}] {meta.get('gi_name', '?')} ({meta.get('gi_type', '?')}) — "
+            f"{meta.get('section', '?')} — {meta.get('source_file', '?')}"
+        )
         context_parts.append(f"{src}\n{chunk['document']}")
 
     context_text = "\n\n---\n\n".join(context_parts)
@@ -217,7 +213,6 @@ def generate(
     """
     context_text, _prompt = build_context(query, context_chunks)
 
-    from openai import OpenAI
 
     client = get_llm_client()
 
@@ -271,7 +266,11 @@ def query_rag(
     # 1. Embed the query and retrieve
     embeddings = embed_texts([query])
     if not embeddings:
-        return {"answer": "Error generating query embedding.", "citations": [], "context_chunks": []}
+        return {
+            "answer": "Error generating query embedding.",
+            "citations": [],
+            "context_chunks": [],
+        }
     query_embedding = embeddings[0]
 
     # 2. Retrieve relevant chunks (retrieve 4x for reranking)

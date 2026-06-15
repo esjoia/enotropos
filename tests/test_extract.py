@@ -5,7 +5,7 @@ from pathlib import Path
 from winegpt.extract import discover_gis
 
 
-def test_discover_gis_basic():
+def test_discover_gis_basic() -> None:
     """discover_gis should find DOP_* and IGP_* folders with PDFs."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -41,7 +41,7 @@ def test_discover_gis_basic():
         assert rioja["pdfs"] == ["DOP_Rioja.pdf"]
 
 
-def test_discover_gis_no_pdfs():
+def test_discover_gis_no_pdfs() -> None:
     """Folders without PDFs should be excluded."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -50,7 +50,7 @@ def test_discover_gis_no_pdfs():
         assert len(gis) == 0
 
 
-def test_discover_gis_skips_non_gi():
+def test_discover_gis_skips_non_gi() -> None:
     """Non-DOP/IGP folders should be skipped."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -60,7 +60,7 @@ def test_discover_gis_skips_non_gi():
         assert len(gis) == 0
 
 
-def test_discover_gis_multiple_pdfs():
+def test_discover_gis_multiple_pdfs() -> None:
     """A GI folder with multiple PDFs (e.g., translations)."""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
