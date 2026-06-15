@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> None:
     logger.info("--- Step 4: Embedding ---")
     embedded = embed_chunks(chunks)
     if not embedded:
-        logger.error("Embedding failed. Check OPENAI_API_KEY.")
+        logger.error("Embedding failed. Check JINA_API_KEY.")
         return
 
     # Step 5: Store in ChromaDB

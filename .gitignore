@@ -30,6 +30,9 @@ data/
 .vscode/
 .idea/
 
+# Temporary upload / sync folders
+.tmp.driveupload/
+
 # Testing
 .pytest_cache/
 htmlcov/

@@ -2,11 +2,12 @@
 
 Manages ChromaDB for storing and querying document chunk embeddings.
 """
+from __future__ import annotations
+
 import logging
 from typing import Any
 
 import chromadb
-from chromadb.config import Settings
 
 from winegpt.config import CHROMA_PATH, TOP_K_CHUNKS
 
@@ -18,10 +19,7 @@ COLLECTION_NAME = "winegpt_es"
 def get_client() -> chromadb.PersistentClient:
     """Get a persistent ChromaDB client."""
     CHROMA_PATH.mkdir(parents=True, exist_ok=True)
-    return chromadb.PersistentClient(
-        path=str(CHROMA_PATH),
-        settings=Settings(anonymized_telemetry=False),
-    )
+    return chromadb.PersistentClient(path=str(CHROMA_PATH))
 
 
 def get_or_create_collection(
@@ -115,6 +113,7 @@ def query(
     k: int = TOP_K_CHUNKS,
     country: str | None = None,
     gi_type: str | None = None,
+    gi_name: str | None = None,
     client: chromadb.PersistentClient | None = None,
 ) -> list[dict[str, Any]]:
     """Query ChromaDB for relevant chunks.
@@ -131,6 +130,8 @@ def query(
         conditions.append({"country": country})
     if gi_type:
         conditions.append({"gi_type": gi_type})
+    if gi_name:
+        conditions.append({"gi_name": gi_name})
 
     if len(conditions) == 1:
         where = conditions[0]

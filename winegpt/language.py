@@ -1,14 +1,12 @@
 """enotropos — Language detection module.
 
 Detects the language of extracted wine specification texts
-using fasttext-langdetect.
+using fasttext-langdetect (ftlangdetect).
 """
 import json
 import logging
 from pathlib import Path
 from typing import Any
-
-from fasttext_langdetect import detect
 
 from winegpt.config import EXTRACTED_DIR, LANG_DETECT_CHAR_LIMIT
 
@@ -19,9 +17,12 @@ def detect_language(text: str) -> str:
     """Detect language of a text snippet. Returns ISO 639-1 code."""
     snippet = text[:LANG_DETECT_CHAR_LIMIT]
     try:
+        from ftlangdetect import detect
+
         result = detect(snippet)
         return result.get("lang", "unknown") if isinstance(result, dict) else str(result)
-    except Exception:
+    except Exception as e:
+        logger.debug("Language detection failed: %s", e)
         return "unknown"
 
 
@@ -36,12 +37,12 @@ def enrich_metadata(json_path: Path) -> str | None:
         logger.warning("Cannot read %s: %s", json_path, e)
         return None
 
-    # Use the first page text or plain text field
-    text = ""
-    if "pages" in data and data["pages"]:
-        text = data["pages"][0].get("text", "")
-    if not text:
-        text = data.get("markdown", "")
+    # Read text from companion .md file if available
+    md_path = json_path.with_suffix(".md")
+    if md_path.exists():
+        text = md_path.read_text(encoding="utf-8")
+    else:
+        text = ""
 
     if not text:
         return None

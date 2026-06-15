@@ -1,28 +1,30 @@
 """enotropos — Embedding module.
 
 Generates vector embeddings for document chunks using
-OpenAI text-embedding-3-small.
+Jina AI embeddings (OpenAI-compatible API).
 """
+from __future__ import annotations
+
 import logging
 import time
 from typing import Any
-
-from openai import OpenAI
 
 from winegpt.config import (
     EMBEDDING_BATCH_SIZE,
     EMBEDDING_BASE_URL,
     EMBEDDING_MODEL,
-    OPENAI_API_KEY,
+    JINA_API_KEY,
 )
 
 logger = logging.getLogger(__name__)
 
 
 def get_client() -> OpenAI:
-    if not OPENAI_API_KEY:
-        raise ValueError("OPENAI_API_KEY not set in .env")
-    return OpenAI(base_url=EMBEDDING_BASE_URL, api_key=OPENAI_API_KEY)
+    from openai import OpenAI
+
+    if not JINA_API_KEY:
+        raise ValueError("JINA_API_KEY not set in .env")
+    return OpenAI(base_url=EMBEDDING_BASE_URL, api_key=JINA_API_KEY)
 
 
 def embed_texts(texts: list[str]) -> list[list[float]] | None:
@@ -52,6 +54,8 @@ def embed_texts(texts: list[str]) -> list[list[float]] | None:
                 wait = 2 ** attempt
                 logger.warning("Embedding error, retrying in %ds: %s", wait, e)
                 time.sleep(wait)
+        if i + EMBEDDING_BATCH_SIZE < len(texts):
+            time.sleep(4.5)
 
     return all_embeddings
 

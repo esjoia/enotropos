@@ -18,6 +18,22 @@ logger = logging.getLogger(__name__)
 CHARS_PER_TOKEN = 4
 HEADING_RE = re.compile(r"^#{2,4}\s+(.+)$", re.MULTILINE)
 
+# Minimum meaningful chunk size (in chars) — discard chunks shorter than this
+MIN_CHUNK_CHARS = 150
+
+# Heading text to ignore (page markers, not real sections)
+_IGNORE_HEADINGS_RE: re.Pattern | None = None
+
+
+def _ignore_heading(heading: str) -> bool:
+    """Check if a heading is just a page marker (should not split on it)."""
+    global _IGNORE_HEADINGS_RE
+    if _IGNORE_HEADINGS_RE is None:
+        _IGNORE_HEADINGS_RE = re.compile(
+            r"(?i)^(pagina?|pàgina?|page|página?)\s+\d+", re.MULTILINE
+        )
+    return bool(_IGNORE_HEADINGS_RE.match(heading.strip()))
+
 
 def estimate_tokens(text: str) -> int:
     """Rough token count estimation."""
@@ -25,13 +41,13 @@ def estimate_tokens(text: str) -> int:
 
 
 def chunk_by_headings(markdown: str) -> list[dict[str, str]]:
-    """Split Markdown by ## / ### / #### headings.
-
-    Each chunk is a dict with 'section' (heading text) and 'markdown' (content).
-    """
+    """Split Markdown by ## / ### / #### headings, skipping page-number headings."""
     positions: list[tuple[int, str]] = []
     for m in HEADING_RE.finditer(markdown):
-        positions.append((m.start(), m.group(1).strip()))
+        heading_text = m.group(1).strip()
+        if _ignore_heading(heading_text):
+            continue
+        positions.append((m.start(), heading_text))
 
     if not positions:
         return []
@@ -105,6 +121,11 @@ def process_json(json_path: Path, source_info: dict[str, str]) -> list[dict[str,
     records: list[dict[str, Any]] = []
 
     for i, chunk in enumerate(chunks):
+        content = chunk["markdown"]
+
+        if len(content) < MIN_CHUNK_CHARS:
+            continue
+
         records.append({
             "chunk_id": f"{source_info['folder']}__{i}",
             "folder": source_info["folder"],
@@ -114,7 +135,7 @@ def process_json(json_path: Path, source_info: dict[str, str]) -> list[dict[str,
             "gi_name": source_info.get("gi_name", data.get("name", "")),
             "language": data.get("language", "unknown"),
             "section": chunk["section"],
-            "markdown": chunk["markdown"],
+            "markdown": content,
         })
 
     return records

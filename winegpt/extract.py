@@ -22,6 +22,49 @@ from winegpt.config import (
 
 logger = logging.getLogger(__name__)
 
+# ---- Markdown cleaning patterns ----
+
+import re as _re
+
+_PICTURE_RE = _re.compile(r"\*\*==> picture .+? intentionally omitted <==\*\*", _re.IGNORECASE)
+_PAGE_NUMBER_RE = _re.compile(r"^\s*-\s*\d+\s*-\s*$", _re.MULTILINE)
+_PAGE_HEADING_RE = _re.compile(r"^#{2,4}\s+[Pp]agina\s+\d+\s*$", _re.MULTILINE)
+_BOILERPLATE_HEADERS = (
+    "**DIRECCIÓN GENERAL DE EMPRESAS AGROALIMENTARIAS Y DESARROLLO RURAL**",
+    "**DIRECCIÓN GENERAL DE INDUSTRIAS Y CALIDAD AGROALIMENTARIA**",
+)
+
+def clean_markdown(md_text: str) -> str:
+    """Remove boilerplate and noise from extracted markdown."""
+    # 1. Remove image placeholder lines
+    md_text = _PICTURE_RE.sub("", md_text)
+
+    # 2. Remove page number markers
+    md_text = _PAGE_NUMBER_RE.sub("", md_text)
+
+    # 2b. Remove "## Pagina X" page headings
+    md_text = _PAGE_HEADING_RE.sub("", md_text)
+
+    # 3. Remove known repeated boilerplate headers
+    for header in _BOILERPLATE_HEADERS:
+        md_text = md_text.replace(header, "")
+
+    # 4. Deduplicate consecutive identical lines (common in page headers)
+    lines = md_text.split("\n")
+    deduped: list[str] = []
+    prev = None
+    for line in lines:
+        stripped = line.strip()
+        if stripped != prev or stripped == "":
+            deduped.append(line)
+        prev = stripped
+    md_text = "\n".join(deduped)
+
+    # 5. Collapse multiple consecutive blank lines (max 2)
+    md_text = _re.sub(r"\n{4,}", "\n\n\n", md_text)
+
+    return md_text.strip()
+
 
 def discover_gis(country_path: Path) -> list[dict[str, Any]]:
     """Discover all DOP_*/IGP_* folders and their PDFs in a country directory.
@@ -73,7 +116,8 @@ def extract_pdf(pdf_path: Path) -> tuple[str, list[dict[str, Any]]]:
         # page_chunks=True returns list of page dicts
         full_text = ""
         for page_dict in md:
-            page_num = page_dict.get("page", 0)
+            metadata = page_dict.get("metadata", {})
+            page_num = metadata.get("page_number", 0)
             text = page_dict.get("text", "")
             full_text += f"\n\n## Pagina {page_num}\n\n{text}"
             pages.append({
@@ -85,6 +129,7 @@ def extract_pdf(pdf_path: Path) -> tuple[str, list[dict[str, Any]]]:
         # Returns plain string
         markdown = str(md)
 
+    markdown = clean_markdown(markdown)
     return markdown, pages
 
 
@@ -92,6 +137,7 @@ def extract_country(
     country: str,
     force: bool = False,
     dry_run: bool = False,
+    gi_filter: str | None = None,
 ) -> dict[str, Any]:
     """Extract all PDFs for a given country.
 
@@ -103,6 +149,11 @@ def extract_country(
         return {"extracted": 0, "skipped": 0, "errors": 0}
 
     gis = discover_gis(country_path)
+    if gi_filter:
+        gis = [gi for gi in gis if gi_filter.lower() in gi["display_name"].lower()]
+        if not gis:
+            logger.error("No GI found matching: %s", gi_filter)
+            return {"extracted": 0, "skipped": 0, "errors": 0}
     total_pdfs = sum(len(gi["pdfs"]) for gi in gis)
     logger.info("Country: %s — %d GIs, %d PDFs", country, len(gis), total_pdfs)
 
@@ -156,6 +207,7 @@ def extract_country(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extract PDFs using pymupdf4llm")
     parser.add_argument("--country", type=str, default="Espanya", help="Country to process")
+    parser.add_argument("--gi", type=str, default=None, help="Filter by GI name (e.g. 'Priorat')")
     parser.add_argument("--force", action="store_true", help="Re-extract all PDFs")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done")
     return parser.parse_args(argv)
@@ -169,7 +221,7 @@ def main(argv: list[str] | None = None) -> None:
     logger.info("Corpus: %s", CORPUS_ROOT)
     logger.info("Output: %s", EXTRACTED_DIR)
 
-    stats = extract_country(args.country, force=args.force, dry_run=args.dry_run)
+    stats = extract_country(args.country, force=args.force, dry_run=args.dry_run, gi_filter=args.gi)
 
     logger.info("")
     logger.info("Done. Extracted: %d | Skipped: %d | Errors: %d",

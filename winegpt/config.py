@@ -31,16 +31,17 @@ CHROMA_PATH = DATA_DIR / "chroma_db"
 # ---- API Keys ----
 OPENCODE_GO_API_KEY = os.getenv("OPENCODE_GO_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+JINA_API_KEY = os.getenv("JINA_API_KEY", "")
 
 # ---- LLM (OpenCode Go / DeepSeek V4 Flash) ----
 LLM_BASE_URL = "https://opencode.ai/zen/go/v1"
 LLM_MODEL = "deepseek-v4-flash"
 
-# ---- Embeddings (OpenAI) ----
-EMBEDDING_BASE_URL = "https://api.openai.com/v1"
-EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIMENSIONS = 1536
-EMBEDDING_BATCH_SIZE = 64
+# ---- Embeddings (Jina AI) ----
+EMBEDDING_BASE_URL = "https://api.jina.ai/v1"
+EMBEDDING_MODEL = "jina-embeddings-v3"
+EMBEDDING_DIMENSIONS = 1024
+EMBEDDING_BATCH_SIZE = 8
 
 # ---- Chunking ----
 CHUNK_SIZE_TOKENS = 800

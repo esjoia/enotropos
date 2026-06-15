@@ -4,8 +4,6 @@ Chat interface for the wine DOP/IGP RAG assistant.
 """
 import streamlit as st
 
-from winegpt.rag import query_rag
-
 st.set_page_config(
     page_title="enotropos — Wine DOP/IGP Assistant",
     page_icon="🍷",
@@ -50,6 +48,8 @@ if prompt := st.chat_input("Ask about a wine denomination..."):
 
     with st.chat_message("assistant"):
         with st.spinner("Searching documents..."):
+            from winegpt.rag import query_rag
+
             result = query_rag(
                 query=prompt,
                 country=country,
