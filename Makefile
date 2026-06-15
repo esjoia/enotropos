@@ -4,7 +4,8 @@ install:
 	pip install -r requirements.txt
 
 dev:
-	pip install -r requirements.txt ruff mypy pytest
+	pip install -r requirements.txt
+	pip install ruff mypy pytest
 
 extract:
 	python winegpt/extract.py --country Espanya
@@ -13,13 +14,17 @@ index:
 	python scripts/build_index.py --country Espanya
 
 serve:
-	streamlit run winegpt/app.py
+	python -m streamlit run winegpt/app.py
 
 test:
-	pytest tests/ -v
+	python -m pytest tests/ -v
 
 lint:
-	ruff check winegpt/ scripts/ tests/
+	python -m ruff check winegpt/ scripts/ tests/
+
+type:
+	python -m mypy winegpt/ scripts/ tests/
 
 clean:
-	rm -rf data/ __pycache__/ .pytest_cache/
+	python -c "import shutil; shutil.rmtree('data', ignore_errors=True); \
+	shutil.rmtree('__pycache__', ignore_errors=True); shutil.rmtree('.pytest_cache', ignore_errors=True)"
