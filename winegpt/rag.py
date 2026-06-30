@@ -450,6 +450,7 @@ def _retrieve(
         k=retrieve_k,
         country=country,
         gi_type=gi_type,
+        gi_names=gi_names or None,
     )
 
     if not context_chunks:

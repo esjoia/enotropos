@@ -143,7 +143,7 @@ def _query_single_country(
     k: int,
     country: str,
     gi_type: str | None,
-    gi_name: str | None,
+    gi_names: list[str] | None,
     client: chromadb.PersistentClient,
 ) -> list[dict[str, Any]]:
     """Query the children collection for one country."""
@@ -153,8 +153,11 @@ def _query_single_country(
     conditions: list[dict[str, Any]] = []
     if gi_type:
         conditions.append({"gi_type": gi_type})
-    if gi_name:
-        conditions.append({"gi_name": gi_name})
+    if gi_names:
+        if len(gi_names) == 1:
+            conditions.append({"gi_name": gi_names[0]})
+        else:
+            conditions.append({"gi_name": {"$in": gi_names}})
 
     if len(conditions) == 1:
         where = conditions[0]
@@ -189,7 +192,7 @@ def query(
     k: int = TOP_K_CHUNKS,
     country: str | None = None,
     gi_type: str | None = None,
-    gi_name: str | None = None,
+    gi_names: list[str] | None = None,
     client: chromadb.PersistentClient | None = None,
 ) -> list[dict[str, Any]]:
     """Query ChromaDB for relevant chunks.
@@ -214,7 +217,7 @@ def query(
                 k=k,
                 country=c,
                 gi_type=gi_type,
-                gi_name=gi_name,
+                gi_names=gi_names,
                 client=client,
             )
         )
