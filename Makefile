@@ -1,4 +1,4 @@
-.PHONY: install dev extract index serve test lint clean
+.PHONY: install dev local extract index index-knowledge graph tables serve test lint type clean
 
 install:
 	pip install -r requirements.txt
@@ -7,11 +7,24 @@ dev:
 	pip install -r requirements.txt
 	pip install ruff mypy pytest
 
+local:
+	pip install -r requirements.txt
+	pip install ".[local]"
+
 extract:
-	python winegpt/extract.py --country Espanya
+	python -m winegpt.extract --country Espanya
 
 index:
-	python scripts/build_index.py --country Espanya
+	python -m scripts.build_index --country Espanya
+
+index-knowledge:
+	python -m scripts.build_knowledge_index
+
+graph:
+	python -m scripts.build_graph
+
+tables:
+	python -m scripts.build_tables_db
 
 serve:
 	python -m streamlit run winegpt/app.py

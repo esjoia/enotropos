@@ -1,0 +1,82 @@
+[
+  {
+    "question": "Quines varietats de raïm blanc estan autoritzades a la DOP Penedès?",
+    "ground_truth": "Segons el plec de condicions de la DOP Penedès, les varietats de raïm blanc autoritzades són Macabeo, Xarel·lo, Parellada, Subirat Parent, Garnacha blanca, Moscatel de Alejandría, Moscatel de grano menudo, Malvasía de Sitges, Chardonnay, Sauvignon blanc, Riesling, Gewurztraminer, Chenin, Sumoi blanc, Viognier, Xarel·lo rosat i Forcada."
+  },
+  {
+    "question": "Quina és la graduació alcohòlica mínima per a un vi negre de la DOP Rioja?",
+    "ground_truth": "Segons el plec de condicions de la DOP Rioja, la graduació alcohòlica volumètrica adquirida mínima per als vins negres és de 11,5% vol."
+  },
+  {
+    "question": "El raïm Cabernet Sauvignon està autoritzat a la DOP Penedès i a la DOP Rioja?",
+    "ground_truth": "El Cabernet Sauvignon està autoritzat a la DOP Penedès com a varietat negra. En canvi, a la DOP Rioja no s'esmenta el Cabernet Sauvignon a la llista de varietats autoritzades; les varietats negres autoritzades són Tempranillo, Garnacha Tinta, Graciano, Mazuelo i Maturana Tinta."
+  },
+  {
+    "question": "Compara les varietats negres autòctones de Rioja i Penedès.",
+    "ground_truth": "La DOP Rioja autoritza Tempranillo, Garnacha Tinta, Graciano, Mazuelo i Maturana Tinta. El Penedès autoritza Ull de Llebre (Tempranillo), Garnacha tinta, Samsó (Mazuelo/Cariñena), Monastrell, Sumoi tinto i Moneu. Ambdues comparteixen Tempranillo, Garnatxa i Mazuelo."
+  },
+  {
+    "question": "Quin és el rendiment màxim autoritzat per hectàrea per a varietats negres a la DOP Rioja?",
+    "ground_truth": "A la DOP Rioja, el rendiment màxim autoritzat per a les varietats de raïm negre és de 6.500 kg per hectàrea."
+  },
+  {
+    "question": "Quina és la graduació alcohòlica mínima per a un vi negre de la DOP Ribera del Duero?",
+    "ground_truth": "Segons el plec de condicions de la DOP Ribera del Duero, la graduació alcohòlica adquirida mínima per als vins negres és de 11,5% vol. Per als vins rosats i blancs el mínim és de 11,0% vol."
+  },
+  {
+    "question": "Quina és la graduació alcohòlica mínima per a un vi negre de la DOP Priorat?",
+    "ground_truth": "Segons el plec de condicions de la DOP Priorat, la graduació alcohòlica volumètrica adquirida mínima per als vins negres és de 13,5% vol."
+  },
+  {
+    "question": "Quin és el període mínim d'envelliment per a un vi Crianza de la DOP Ribera del Duero?",
+    "ground_truth": "Segons el plec de condicions de la DOP Ribera del Duero, el període mínim d'envelliment per a un vi Crianza és de 24 mesos, dels quals almenys 12 mesos han de ser en barrica de roure."
+  },
+  {
+    "question": "Quina és l'acidesa volàtil màxima permesa per a un vi negre de la DOP Priorat?",
+    "ground_truth": "Segons el plec de condicions de la DOP Priorat, l'acidesa volàtil màxima per als vins negres és de 1,2 g/l."
+  },
+  {
+    "question": "Quines són les tres subzones de producció de la DOP Rioja?",
+    "ground_truth": "La DOP Rioja es divideix en tres subzones: Rioja Alta, Rioja Alavesa i Rioja Oriental."
+  },
+  {
+    "question": "Quin és el raïm blanc principal de la DOP Rueda?",
+    "ground_truth": "La varietat blanca principal de la DOP Rueda és la Verdejo. Altres varietats blanques autoritzades inclouen Sauvignon Blanc, Viura, Chardonnay i Viognier com a principals, i Palomino Fino com a secundària."
+  },
+  {
+    "question": "El raïm Ull de Llebre a la DOP Penedès és el mateix que alguna varietat autoritzada a la DOP Rioja?",
+    "ground_truth": "Sí. Ull de Llebre és el nom català del Tempranillo, que és la varietat negra principal a la DOP Rioja. Per tant, ambdues denominacions autoritzen el Tempranillo/Ull de Llebre."
+  },
+  {
+    "question": "Quantes denominacions d'origen protegides hi ha aproximadament a Espanya?",
+    "ground_truth": "Segons el corpus del projecte Enotropos, hi ha al voltant de 150 DOP i IGP de vi registrades a Espanya, entre les quals unes 100 són DOP i una cinquantena són IGP."
+  },
+  {
+    "question": "Quina diferència hi ha entre una DOP i una IGP en la regulació europea de vins?",
+    "ground_truth": "Una DOP (Denominació d'Origen Protegida) requereix que totes les fases de producció, transformació i elaboració tinguin lloc dins la zona geogràfica delimitada. Una IGP (Indicació Geogràfica Protegida) és menys restrictiva: almenys una de les fases de producció ha de tenir lloc a la zona. Les DOP són més estrictes en rendiments, varietats i característiques del producte."
+  },
+  {
+    "question": "Quina varietat blanca és autòctona de Galícia i s'usa a la DOP Rías Baixas?",
+    "ground_truth": "L'Albariño és la varietat blanca autòctona més emblemàtica de la DOP Rías Baixas. Altres varietats blanques autoritzades inclouen Loureira Blanca, Treixadura, Caiño Blanco, Godello i Torrontés."
+  },
+  {
+    "question": "Quina és la densitat mínima de plantació per a noves vinyes a la DOP Ribera del Duero?",
+    "ground_truth": "Segons el plec de condicions de la DOP Ribera del Duero, la densitat mínima de plantació per a noves vinyes és de 2.000 ceps per hectàrea."
+  },
+  {
+    "question": "Quines DOP de vi negre amb criança en roure existeixen a la zona del Duero a Espanya?",
+    "ground_truth": "A la zona del riu Duero hi ha diverses DOP importants de vi negre: Ribera del Duero, Toro, Rueda (principalment blanc però també negre), Arribes, Cigales, León, Tierra del Vino de Zamora i Arlanza."
+  },
+  {
+    "question": "Quin és el contingut màxim d'anhídrid sulfurós total per a un vi negre de la DOP Ribera del Duero?",
+    "ground_truth": "Segons el plec de condicions de la DOP Ribera del Duero, el contingut màxim d'anhídrid sulfurós total per als vins negres és de 150 mg/l."
+  },
+  {
+    "question": "Els vins de la DOP Rioja es poden elaborar amb raïm de qualsevol comunitat autònoma?",
+    "ground_truth": "No. La DOP Rioja té una zona de producció delimitada que comprèn municipis de tres comunitats autònomes: La Rioja, el País Basc (Àlaba) i Navarra. Només es pot usar raïm d'aquesta zona delimitada."
+  },
+  {
+    "question": "Què és un terme tradicional de vi segons la normativa europea? Dona algun exemple espanyol.",
+    "ground_truth": "Un terme tradicional és una menció protegida per la UE que pot utilitzar-se en lloc de les indicacions DOP o IGP, o per designar mètodes d'elaboració o envelliment. Exemples espanyols inclouen Crianza, Reserva, Gran Reserva, Noble, Añejo, Viejo, i termes com Vino de Calidad o DO Calificada."
+  }
+]

@@ -37,3 +37,6 @@ data/
 .pytest_cache/
 htmlcov/
 .coverage
+
+# Generated eval output (eval_dataset.json is the input, keep it)
+eval_results.json

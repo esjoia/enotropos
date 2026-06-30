@@ -1,52 +1,93 @@
 """enotropos — PDF extraction module.
 
 Discovers wine GI folders (DOP_*/IGP_*) in the corpus and extracts
-Markdown + JSON from each PDF using pymupdf4llm (Smart Hybrid OCR).
+Markdown + JSON from each PDF. By default uses ``pymupdf4llm`` for rich
+Markdown output (headings, tables, bold text); ``--fast`` falls back to
+plain PyMuPDF (fitz).
 """
 import argparse
 import json
 import logging
 import re as _re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import pymupdf4llm
+import fitz
 from tqdm import tqdm
 
 from winegpt.config import (
-    CORPUS_ROOT,
     EXTRACTED_DIR,
-    EXTRACTION_PAGE_CHUNKS,
-    EXTRACTION_WRITE_IMAGES,
+    get_corpus_root,
 )
+from winegpt.schema import parse_folder_name
+from winegpt.table_extractor import enrich_markdown_with_tables
 
 logger = logging.getLogger(__name__)
 
 # ---- Markdown cleaning patterns ----
-
+# Generic patterns (apply to every country): image placeholders, page markers.
 _PICTURE_RE = _re.compile(r"\*\*==> picture .+? intentionally omitted <==\*\*", _re.IGNORECASE)
 _PAGE_NUMBER_RE = _re.compile(r"^\s*-\s*\d+\s*-\s*$", _re.MULTILINE)
-_PAGE_HEADING_RE = _re.compile(r"^#{2,4}\s+[Pp]agina\s+\d+\s*$", _re.MULTILINE)
-_BOILERPLATE_HEADERS = (
-    "**DIRECCIÓN GENERAL DE EMPRESAS AGROALIMENTARIAS Y DESARROLLO RURAL**",
-    "**DIRECCIÓN GENERAL DE INDUSTRIAS Y CALIDAD AGROALIMENTARIA**",
+_PAGE_HEADING_RE = _re.compile(r"^#{2,4}\s+[Ppàaág]g[eií]na\s+\d+\s*$", _re.MULTILINE)
+_PAGE_WORD_RE = _re.compile(
+    r"^\s*(P[àaá]g[eií]na|Pagina|Page|Seite|Pág\.)\s+\d+\s*$",
+    _re.MULTILINE | _re.IGNORECASE,
 )
 
-def clean_markdown(md_text: str) -> str:
-    """Remove boilerplate and noise from extracted markdown."""
+# Country-specific boilerplate. Keyed by country so new countries can be added
+# without touching the generic cleaning logic. Use ``""`` to skip country
+# cleaning (e.g. for the knowledge corpus, which is not country-bound).
+
+
+@dataclass(frozen=True)
+class _BoilerplateConfig:
+    """Country-specific markdown boilerplate to strip."""
+
+    header_regexes: tuple["_re.Pattern[str]", ...]
+    literal_headers: tuple[str, ...]
+
+
+_BOILERPLATE_BY_COUNTRY: dict[str, _BoilerplateConfig] = {
+    "Espanya": _BoilerplateConfig(
+        header_regexes=(
+            _re.compile(r"^BOLET[IÍ]N OFICIAL DEL ESTADO.*$", _re.MULTILINE | _re.IGNORECASE),
+        ),
+        literal_headers=(
+            "**DIRECCIÓN GENERAL DE EMPRESAS AGROALIMENTARIAS Y DESARROLLO RURAL**",
+            "**DIRECCIÓN GENERAL DE INDUSTRIAS Y CALIDAD AGROALIMENTARIA**",
+        ),
+    ),
+}
+
+
+def clean_markdown(md_text: str, country: str = "Espanya") -> str:
+    """Remove boilerplate and noise from extracted markdown.
+
+    Generic cleaning (image placeholders, page markers, duplicate lines) always
+    runs. Country-specific boilerplate (e.g. BOE headers for Spain) only runs
+    when ``country`` matches a configured entry; pass ``""`` to skip it.
+    """
     # 1. Remove image placeholder lines
     md_text = _PICTURE_RE.sub("", md_text)
 
-    # 2. Remove page number markers
+    # 2. Remove page number markers (e.g. "- 5 -")
     md_text = _PAGE_NUMBER_RE.sub("", md_text)
 
     # 2b. Remove "## Pagina X" page headings
     md_text = _PAGE_HEADING_RE.sub("", md_text)
 
-    # 3. Remove known repeated boilerplate headers
-    for header in _BOILERPLATE_HEADERS:
-        md_text = md_text.replace(header, "")
+    # 2c. Remove standalone "Página X" / "Page X" text
+    md_text = _PAGE_WORD_RE.sub("", md_text)
+
+    # 2d. Country-specific boilerplate
+    cfg = _BOILERPLATE_BY_COUNTRY.get(country)
+    if cfg is not None:
+        for rx in cfg.header_regexes:
+            md_text = rx.sub("", md_text)
+        for header in cfg.literal_headers:
+            md_text = md_text.replace(header, "")
 
     # 4. Deduplicate consecutive identical lines (common in page headers)
     lines = md_text.split("\n")
@@ -60,7 +101,7 @@ def clean_markdown(md_text: str) -> str:
     md_text = "\n".join(deduped)
 
     # 5. Collapse multiple consecutive blank lines (max 2)
-    md_text = _re.sub(r"\n{4,}", "\n\n\n", md_text)
+    md_text = _re.sub(r"\n{3,}", "\n\n", md_text)
 
     return md_text.strip()
 
@@ -74,14 +115,8 @@ def discover_gis(country_path: Path) -> list[dict[str, Any]]:
     for folder in sorted(country_path.iterdir()):
         if not folder.is_dir():
             continue
-        name = folder.name
-        if name.startswith("DOP_"):
-            gi_type = "DOP"
-            display = name[4:]
-        elif name.startswith("IGP_"):
-            gi_type = "IGP"
-            display = name[4:]
-        else:
+        info = parse_folder_name(folder.name)
+        if not info.is_gi:
             continue
 
         pdfs = sorted(folder.glob("*.pdf"))
@@ -89,9 +124,9 @@ def discover_gis(country_path: Path) -> list[dict[str, Any]]:
             continue
 
         gis.append({
-            "folder_name": name,
-            "display_name": display,
-            "gi_type": gi_type,
+            "folder_name": folder.name,
+            "display_name": info.gi_name,
+            "gi_type": info.gi_type,
             "path": folder,
             "pdfs": [p.name for p in pdfs],
             "pdf_paths": pdfs,
@@ -99,37 +134,70 @@ def discover_gis(country_path: Path) -> list[dict[str, Any]]:
     return gis
 
 
-def extract_pdf(pdf_path: Path) -> tuple[str, list[dict[str, Any]]]:
+def _extract_fitz_text(pdf_path: Path) -> str:
+    """Fast fallback extraction using PyMuPDF (fitz)."""
+    doc = fitz.open(pdf_path)
+    parts: list[str] = []
+
+    for page_num, page in enumerate(doc, start=1):
+        text = page.get_text()
+        parts.append(f"\n\n## Pagina {page_num}\n\n{text}")
+
+    doc.close()
+    return "\n".join(parts)
+
+
+def extract_pdf(
+    pdf_path: Path,
+    use_pymupdf4llm: bool = True,
+    enrich_tables: bool = False,
+    country: str = "Espanya",
+) -> tuple[str, list[dict[str, Any]], str]:
     """Extract Markdown and page-level data from a single PDF.
 
-    Returns (markdown_str, pages_list).
+    By default uses ``pymupdf4llm`` for rich Markdown output (headings, tables,
+    bold text). Falls back to plain PyMuPDF (fitz) if ``use_pymupdf4llm`` is
+    False or if the rich extraction fails.
+
+    If ``enrich_tables`` is True, runs LLM-based table detection and clean-up
+    on pages that contain table structures. This adds cost and latency.
+
+    ``country`` selects country-specific markdown cleaning (e.g. BOE headers
+    for Spain). Pass ``""`` to skip country-specific cleaning (used for the
+    knowledge corpus).
+
+    Returns (markdown_str, pages_list, extraction_method).
     """
-    md = pymupdf4llm.to_markdown(
-        pdf_path,
-        write_images=EXTRACTION_WRITE_IMAGES,
-        page_chunks=EXTRACTION_PAGE_CHUNKS,
-    )
+    doc = fitz.open(pdf_path)
+    page_count = len(doc)
+    doc.close()
 
-    pages: list[dict[str, Any]] = []
-    if isinstance(md, list):
-        # page_chunks=True returns list of page dicts
-        full_text = ""
-        for page_dict in md:
-            metadata = page_dict.get("metadata", {})
-            page_num = metadata.get("page_number", 0)
-            text = page_dict.get("text", "")
-            full_text += f"\n\n## Pagina {page_num}\n\n{text}"
-            pages.append({
-                "page": page_num,
-                "text": text,
-            })
-        markdown = full_text
+    if use_pymupdf4llm:
+        try:
+            import pymupdf4llm
+
+            md_text = str(pymupdf4llm.to_markdown(str(pdf_path)))
+            method = "pymupdf4llm"
+        except Exception as e:  # pragma: no cover - defensive fallback
+            logger.warning(
+                "pymupdf4llm failed for %s, falling back to fitz: %s",
+                pdf_path.name,
+                e,
+            )
+            md_text = _extract_fitz_text(pdf_path)
+            method = "pymupdf (fitz)"
     else:
-        # Returns plain string
-        markdown = str(md)
+        md_text = _extract_fitz_text(pdf_path)
+        method = "pymupdf (fitz)"
 
-    markdown = clean_markdown(markdown)
-    return markdown, pages
+    # Enrich with LLM-extracted tables if requested
+    if enrich_tables and use_pymupdf4llm:
+        md_text = enrich_markdown_with_tables(md_text, pdf_path)
+        method += " + table_llm"
+
+    pages = [{"page": i} for i in range(1, page_count + 1)]
+    markdown = clean_markdown(md_text, country=country)
+    return markdown, pages, method
 
 
 def extract_country(
@@ -137,12 +205,14 @@ def extract_country(
     force: bool = False,
     dry_run: bool = False,
     gi_filter: str | None = None,
+    fast: bool = False,
+    enrich_tables: bool = False,
 ) -> dict[str, Any]:
     """Extract all PDFs for a given country.
 
     Returns stats dict with counts.
     """
-    country_path = CORPUS_ROOT / country
+    country_path = get_corpus_root() / country
     if not country_path.exists():
         logger.error("Country directory not found: %s", country_path)
         return {"extracted": 0, "skipped": 0, "errors": 0}
@@ -177,7 +247,12 @@ def extract_country(
                 continue
 
             try:
-                markdown, pages = extract_pdf(pdf_path)
+                markdown, pages, method = extract_pdf(
+                    pdf_path,
+                    use_pymupdf4llm=not fast,
+                    enrich_tables=enrich_tables,
+                    country=country,
+                )
 
                 md_path.write_text(markdown, encoding="utf-8")
 
@@ -187,7 +262,7 @@ def extract_country(
                     "type": gi["gi_type"],
                     "name": gi["display_name"],
                     "folder": gi["folder_name"],
-                    "extraction_method": "pymupdf4llm",
+                    "extraction_method": method,
                     "char_count": len(markdown),
                     "page_count": len(pages),
                 }
@@ -208,6 +283,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--country", type=str, default="Espanya", help="Country to process")
     parser.add_argument("--gi", type=str, default=None, help="Filter by GI name (e.g. 'Priorat')")
     parser.add_argument("--force", action="store_true", help="Re-extract all PDFs")
+    parser.add_argument("--fast", action="store_true", help="Use fast fitz instead of pymupdf4llm")
+    parser.add_argument(
+        "--enrich-tables", action="store_true",
+        help="Use LLM to extract clean table Markdown",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done")
     return parser.parse_args(argv)
 
@@ -217,10 +297,17 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 
     logger.info("=== enotropos — PDF Extraction ===")
-    logger.info("Corpus: %s", CORPUS_ROOT)
+    logger.info("Corpus: %s", get_corpus_root())
     logger.info("Output: %s", EXTRACTED_DIR)
 
-    stats = extract_country(args.country, force=args.force, dry_run=args.dry_run, gi_filter=args.gi)
+    stats = extract_country(
+        args.country,
+        force=args.force,
+        dry_run=args.dry_run,
+        gi_filter=args.gi,
+        fast=args.fast,
+        enrich_tables=args.enrich_tables,
+    )
 
     logger.info("")
     logger.info("Done. Extracted: %d | Skipped: %d | Errors: %d",

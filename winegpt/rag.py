@@ -10,8 +10,11 @@ Retrieval-Augmented Generation chain:
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
+from collections.abc import Generator
+from pathlib import Path
 from typing import Any
 
 from winegpt.config import (
@@ -21,43 +24,101 @@ from winegpt.config import (
 )
 from winegpt.embed import embed_texts
 from winegpt.llm import get_llm_client
+from winegpt.schema import StreamResult
 
 logger = logging.getLogger(__name__)
 
+_KEYWORDS_PATH = Path(__file__).parent / "data" / "keywords.json"
+_keywords_cache: dict[str, Any] | None = None
 
-def _extract_gi_name(query: str) -> str | None:
-    """Extract GI name from a query like 'varietats de la DOP Rioja?' → 'Rioja'."""
-    match = re.search(
-        r"(?:DOP|dop|IGP|igp)\s+(?:de\s+)?(?:la\s+)?(?:el\s+)?([A-ZÀ-Ü][\w\s\-']+?)(?:\s*\?|$|\.|,|\")",
+
+def _load_keywords() -> dict[str, Any]:
+    """Load and cache the keyword tables (CA→ES map + stop words)."""
+    global _keywords_cache
+    if _keywords_cache is None:
+        _keywords_cache = json.loads(_KEYWORDS_PATH.read_text(encoding="utf-8"))
+    return _keywords_cache
+
+
+_gi_names_cache: dict[str, str] | None = None
+
+
+def _load_corpus_gi_names() -> dict[str, str]:
+    """Load and cache known GI names from the extracted corpus.
+
+    Returns ``{normalized_display_name: underscore_name}`` so we can detect
+    queries like *"varietats de Rioja"* (no DOP/IGP prefix).
+    """
+    global _gi_names_cache
+    if _gi_names_cache is not None:
+        return _gi_names_cache
+    _gi_names_cache = {}
+    from winegpt.config import EXTRACTED_DIR
+    from winegpt.schema import parse_folder_name
+    for country_dir in sorted(EXTRACTED_DIR.iterdir()):
+        if not country_dir.is_dir():
+            continue
+        for gi_dir in country_dir.iterdir():
+            if not gi_dir.is_dir():
+                continue
+            info = parse_folder_name(gi_dir.name)
+            if not info.is_gi:
+                continue
+            norm_lower = info.display_name.lower().replace(" ", "_")
+            _gi_names_cache[norm_lower] = info.gi_name
+            _gi_names_cache[info.gi_name.lower()] = info.gi_name
+    return _gi_names_cache
+
+
+def _extract_gi_names(query: str) -> list[str]:
+    """Extract GI names from a query.
+
+    Example: 'varietats DOP Rioja i DOP Penedès?' → ['Rioja', 'Penedès'].
+    Also detects names without explicit DOP/IGP prefix via corpus lookup
+    (e.g. 'varietats de Rioja' → ['Rioja']).
+    """
+    matches = re.finditer(
+        r"(?:DOP|dop|IGP|igp)\s+(?:de\s+)?(?:la\s+)?(?:el\s+)?([A-ZÀ-Ü][\w\s\-']+?)(?=\s*(?:[.,?\"']|\s+i\s+|\s+y\s+|\s+o\s+|\s+a\s+|\s+amb\s+|$))",
         query,
     )
-    if not match:
-        return None
-    name = match.group(1).strip()
-    # Keep only words starting with uppercase (proper nouns) and known connectors
-    parts = name.split()
-    result: list[str] = []
-    for i, part in enumerate(parts):
-        # Keep if starts with uppercase OR is a known connector (de, del, los, etc.)
-        is_upper = part[0].isupper() if part else False
-        is_connector = part.lower() in {
-            "de", "del", "dels", "los", "las", "la", "el", "y", "i", "d",
-        }
-        if i == 0 and not is_upper:
-            return None  # First word must be proper noun
-        if is_upper or is_connector:
-            result.append(part)
-        else:
-            break  # Stop at first non-proper, non-connector lowercase word
-    name = " ".join(result) if result else None
-    # Normalize: replace spaces with underscores to match ChromaDB metadata format
-    return name.replace(" ", "_") if name else None
+    names = []
+    for match in matches:
+        name = match.group(1).strip()
+        parts = name.split()
+        result: list[str] = []
+        for i, part in enumerate(parts):
+            is_upper = part[0].isupper() if part else False
+            is_connector = part.lower() in {
+                "de", "del", "dels", "los", "las", "la", "el", "y", "i", "d", "d'",
+            }
+            if i == 0 and not is_upper:
+                break
+            if is_upper or is_connector:
+                result.append(part)
+            else:
+                break
+        if result:
+            final_name = " ".join(result).replace(" ", "_")
+            if final_name not in names:
+                names.append(final_name)
+
+    # Detect GI names without DOP/IGP prefix by matching against the corpus
+    corpus_names = _load_corpus_gi_names()
+    query_norm = query.lower().replace("-", " ").replace("_", " ")
+    for norm_key, underscore_name in corpus_names.items():
+        search_name = norm_key.replace("_", " ").lower()
+        if len(search_name) >= 4 and search_name in query_norm:
+            if underscore_name not in names:
+                names.append(underscore_name)
+
+    return names
 
 
 def _rerank_chunks(
     query: str,
     chunks: list[dict[str, Any]],
     top_k: int = TOP_K_CHUNKS,
+    gi_names: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid reranking: combine embedding similarity with keyword matching.
 
@@ -68,82 +129,28 @@ def _rerank_chunks(
         return chunks
 
     # Extract meaningful keywords from query (words > 3 chars, not stop words)
-    _stop_words = {
-        "que", "quines", "quins", "quin", "quina",
-        "son", "esta", "estan", "amb", "per", "de", "la", "el", "els",
-        "les", "a", "en", "d", "i", "o", "es", "una", "un", "uns",
-        "unes", "del", "dels", "com", "qui", "se", "ens",
-        "what", "is", "the", "are", "of", "in", "to", "for", "and",
-    }
+    kw_data = _load_keywords()
+    stop_words = set(kw_data["stop_words"])
+    ca_es_map: dict[str, str] = kw_data["ca_es_map"]
     query_words = [w.lower() for w in re.findall(r"[a-zA-Zà-üÀ-Ü]{4,}", query)]
-    keywords = [w for w in query_words if w not in _stop_words]
+    keywords = [w for w in query_words if w not in stop_words]
+
+    # Exclude GI names from keywords so they don't monopolize keyword score
+    gi_lowers = [g.lower().replace("_", " ") for g in (gi_names or [])]
+    filtered_keywords = []
+    for kw in keywords:
+        if not any(kw in g for g in gi_lowers) and not any(g in kw for g in gi_lowers):
+            filtered_keywords.append(kw)
+    keywords = filtered_keywords
 
     # Expand keywords: add Spanish equivalents for Catalan words
-    _ca_es_map = {
-        "varietats": "variedades",
-        "varietat": "variedad",
-        "raim": "uva",
-        "raïm": "uva",
-        "blanc": "blanco",
-        "blanca": "blanca",
-        "negre": "tinto",
-        "negres": "tintas",
-        "envelliment": "envejecimiento",
-        "criança": "crianza",
-        "crianca": "crianza",
-        "rendiment": "rendimiento",
-        "geografics": "geograficos",
-        "geogràfics": "geograficos",
-        "limits": "limites",
-        "límit": "limite",
-        "pràctiques": "practicas",
-        "pratiques": "practicas",
-        "enologiques": "enologicas",
-        "metodes": "metodos",
-        "mètodes": "metodos",
-        "periode": "periodo",
-        "període": "periodo",
-        "minim": "minimo",
-        "mínim": "minimo",
-        "maxim": "maximo",
-        "màxim": "maximo",
-        "produccio": "produccion",
-        "producció": "produccion",
-        "subzones": "subzonas",
-        "qualificacio": "calificacion",
-        "qualificació": "calificacion",
-        "criteris": "criterios",
-        "foranies": "foraneas",
-        "forànies": "foraneas",
-        "autoritza": "autoriza",
-        "autoritzades": "autorizadas",
-        "autoritzats": "autorizados",
-        "permes": "permitido",
-        "permès": "permitido",
-        "permesos": "permitidos",
-        "poda": "poda",
-        "densitat": "densidad",
-        "plantacio": "plantacion",
-        "plantació": "plantacion",
-        "extraccio": "extraccion",
-        "extracció": "extraccion",
-        "contingut": "contenido",
-        "graduacio": "graduacion",
-        "graduació": "graduacion",
-        "alcoholica": "alcoholica",
-        "alcohòlica": "alcoholica",
-        "tipus": "tipos",
-        "produeix": "produce",
-        "vins": "vinos",
-        "vi": "vino",
-    }
     expanded_keywords = set(keywords)
     for kw in keywords:
-        es = _ca_es_map.get(kw)
+        es = ca_es_map.get(kw)
         if es:
             expanded_keywords.add(es)
         # Also add partial matches
-        for ca, es in _ca_es_map.items():
+        for ca, es in ca_es_map.items():
             if ca.startswith(kw) or kw.startswith(ca):
                 expanded_keywords.add(ca)
                 expanded_keywords.add(es)
@@ -166,15 +173,28 @@ def _rerank_chunks(
         distance = chunk.get("distance", 1.0)
         emb_score = max(0.0, 1.0 - distance)
 
-        # Combined: 50% embedding + 50% keywords
-        combined = 0.5 * emb_score + 0.5 * kw_score
+        # GI match bonus
+        stored_name = chunk.get("metadata", {}).get("gi_name", "").lower().replace("_", " ")
+        gi_match_bonus = 0.0
+        for gi_lower in gi_lowers:
+            if gi_lower in stored_name or stored_name in gi_lower:
+                gi_match_bonus = 0.4
+                break
+
+        # Combined: 30% embedding + 50% keywords + 20% bonus
+        combined = 0.3 * emb_score + 0.5 * kw_score + gi_match_bonus
         scored.append((combined, chunk))
 
     scored.sort(key=lambda x: x[0], reverse=True)
     return [c for _, c in scored[:top_k]]
 
 
-def build_context(query: str, context_chunks: list[dict[str, Any]]) -> tuple[str, str]:
+def build_context(
+    query: str,
+    context_chunks: list[dict[str, Any]],
+    gi_names: list[str] | None = None,
+    conversation_history: str = "",
+) -> tuple[str, str]:
     """Build context text and full prompt from retrieved chunks.
 
     Returns (context_text, full_prompt).
@@ -190,10 +210,27 @@ def build_context(query: str, context_chunks: list[dict[str, Any]]) -> tuple[str
 
     context_text = "\n\n---\n\n".join(context_parts)
 
+    extra_instructions = ""
+    if gi_names and len(gi_names) > 1:
+        extra_instructions = (
+            "\nS'ha detectat que la consulta involucra múltiples regions geogràfiques. "
+            "Si es demana una comparació o llistat combinat, estructura la teva resposta "
+            "de forma clara, preferiblement utilitzant taules o llistes estructurades per "
+            "cada regió, destacant-ne les similituds i diferències principals."
+        )
+
+    history_block = (
+        f"{conversation_history}\n\n"
+        if conversation_history
+        else ""
+    )
+
     prompt = (
         "Basat exclusivament en els documents seguents, respon la pregunta. "
         "Cita les fonts entre claudators (ex: [1]). "
-        "Si la informacio no es troba als documents, digues-ho.\n\n"
+        "Si la informacio no es troba als documents, digues-ho."
+        f"{extra_instructions}\n\n"
+        f"{history_block}"
         f"## Documents de referencia\n\n{context_text}\n\n"
         f"## Pregunta\n\n{query}\n\n"
         "## Resposta"
@@ -204,6 +241,8 @@ def build_context(query: str, context_chunks: list[dict[str, Any]]) -> tuple[str
 def generate(
     query: str,
     context_chunks: list[dict[str, Any]],
+    gi_names: list[str] | None = None,
+    conversation_history: str = "",
 ) -> tuple[str, list[dict[str, str]]]:
     """Generate an answer using the LLM with retrieved context.
 
@@ -211,8 +250,9 @@ def generate(
 
     Returns (answer, citations).
     """
-    context_text, _prompt = build_context(query, context_chunks)
-
+    context_text, _prompt = build_context(
+        query, context_chunks, gi_names, conversation_history,
+    )
 
     client = get_llm_client()
 
@@ -231,6 +271,65 @@ def generate(
         logger.error("LLM error: %s", e)
         return f"Error generating answer: {e}", []
 
+    citations = _build_citations(context_chunks)
+    return answer, citations
+
+
+def generate_stream(
+    query: str,
+    context_chunks: list[dict[str, Any]],
+    gi_names: list[str] | None = None,
+    conversation_history: str = "",
+    result: StreamResult | None = None,
+) -> Generator[str, None, None]:
+    """Generate a streaming answer using the LLM.
+
+    Yields token chunks as they arrive. If a ``result`` holder is provided, it
+    is populated with the final ``answer`` and ``citations`` once the stream is
+    exhausted (preferred over the legacy ``generator.value`` pattern).
+
+    Uses DeepSeek V4 Flash via OpenCode Go with SSE streaming.
+    """
+    _context_text, prompt = build_context(
+        query, context_chunks, gi_names, conversation_history,
+    )
+
+    client = get_llm_client()
+    full_answer: list[str] = []
+
+    try:
+        stream = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+            max_tokens=16000,
+            stream=True,
+        )
+
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                full_answer.append(delta.content)
+                yield delta.content
+
+    except Exception as e:
+        logger.error("LLM streaming error: %s", e)
+        msg = f"\n\nError generating answer: {e}"
+        full_answer.append(msg)
+        yield msg
+
+    if result is not None:
+        result.answer = "".join(full_answer)
+        result.citations = _build_citations(context_chunks)
+
+
+def _build_citations(
+    context_chunks: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Build citation list from context chunks."""
     citations: list[dict[str, str]] = []
     for i, chunk in enumerate(context_chunks, 1):
         meta = chunk["metadata"]
@@ -242,8 +341,7 @@ def generate(
             "source_file": meta.get("source_file", ""),
             "country": meta.get("country", ""),
         })
-
-    return answer, citations
+    return citations
 
 
 def query_rag(
@@ -251,69 +349,105 @@ def query_rag(
     country: str | None = None,
     gi_type: str | None = None,
     top_k: int = TOP_K_CHUNKS,
+    conversation_history: str = "",
 ) -> dict[str, Any]:
-    """Full RAG pipeline: extract GI → translate → embed → retrieve → generate.
+    """Full RAG pipeline: extract GI → embed → retrieve → generate.
 
-    Returns dict with answer, citations, and context_chunks.
+    Returns a dict with a consistent shape::
+
+        {"answer", "citations", "context_chunks", "gi_names", "ok"}
+
+    On failure ``ok`` is ``False`` and ``answer`` carries the error message.
     """
-    from winegpt.store import query as store_query
+    context_chunks, gi_names, error = _retrieve(query, country, gi_type, top_k)
+    if error:
+        error["ok"] = False
+        error.setdefault("gi_names", [])
+        return error
 
-    # 0. Extract GI name for metadata filtering
-    gi_name = _extract_gi_name(query)
-    if gi_name:
-        logger.info("Detected GI name: %s", gi_name)
-
-    # 1. Embed the query and retrieve
-    embeddings = embed_texts([query])
-    if not embeddings:
-        return {
-            "answer": "Error generating query embedding.",
-            "citations": [],
-            "context_chunks": [],
-        }
-    query_embedding = embeddings[0]
-
-    # 2. Retrieve relevant chunks (retrieve 4x for reranking)
-    context_chunks = store_query(
-        query_embedding,
-        k=top_k * 4,
-        country=country,
-        gi_type=gi_type,
+    answer, citations = generate(
+        query, context_chunks, gi_names, conversation_history,
     )
-
-    # 2b. Fuzzy GI name filtering: boost or filter chunks matching the query GI
-    if gi_name and context_chunks:
-        gi_lower = gi_name.lower().replace("_", " ")
-        matched = []
-        unmatched = []
-        for chunk in context_chunks:
-            stored_name = chunk.get("metadata", {}).get("gi_name", "").lower().replace("_", " ")
-            # Check if extracted name is substring of stored name or vice versa
-            if gi_lower in stored_name or stored_name in gi_lower:
-                matched.append(chunk)
-            else:
-                unmatched.append(chunk)
-        if matched:
-            # Prefer matched chunks, but keep unmatched as fallback
-            context_chunks = matched + unmatched
-        else:
-            logger.info("No fuzzy GI name match for '%s', using all results", gi_name)
-
-    if not context_chunks:
-        return {
-            "answer": "No relevant documents found for your query.",
-            "citations": [],
-            "context_chunks": [],
-        }
-
-    # 2b. Rerank chunks with LLM to select the most relevant
-    context_chunks = _rerank_chunks(query, context_chunks, top_k)
-
-    # 3. Generate answer
-    answer, citations = generate(query, context_chunks)
 
     return {
         "answer": answer,
         "citations": citations,
         "context_chunks": context_chunks,
+        "gi_names": gi_names,
+        "ok": True,
     }
+
+
+def query_rag_stream(
+    query: str,
+    country: str | None = None,
+    gi_type: str | None = None,
+    top_k: int = TOP_K_CHUNKS,
+    conversation_history: str = "",
+) -> tuple[Generator[str, None, None], StreamResult]:
+    """Streaming version of query_rag.
+
+    Returns ``(generator, result)``. Iterate the generator to render tokens;
+    once exhausted, ``result.answer`` / ``result.citations`` are populated. If
+    retrieval fails, the generator yields the error message and ``result.answer``
+    is set to it.
+    """
+    result = StreamResult()
+
+    context_chunks, gi_names, error = _retrieve(query, country, gi_type, top_k)
+    if error:
+        msg = error["answer"]
+        result.answer = msg
+
+        def _err_gen() -> Generator[str, None, None]:
+            yield msg
+        return _err_gen(), result
+
+    def _gen() -> Generator[str, None, None]:
+        yield from generate_stream(
+            query, context_chunks, gi_names, conversation_history, result,
+        )
+    return _gen(), result
+
+
+def _retrieve(
+    query: str,
+    country: str | None,
+    gi_type: str | None,
+    top_k: int,
+) -> tuple[list[dict[str, Any]], list[str], dict[str, Any] | None]:
+    """Shared retrieval logic. Returns (chunks, gi_names, error_dict_or_None)."""
+    from winegpt.store import query as store_query
+
+    gi_names = _extract_gi_names(query)
+    if gi_names:
+        logger.info("Detected GI names: %s", gi_names)
+
+    embeddings, embed_err = embed_texts([query], input_type="query")
+    if embed_err is not None or not embeddings:
+        return [], [], {
+            "answer": f"Error generating query embedding: {embed_err or 'empty response'}",
+            "citations": [],
+            "context_chunks": [],
+        }
+
+    multiplier = max(1, len(gi_names))
+    retrieve_k = top_k * 8 * multiplier
+    final_k = top_k * multiplier
+
+    context_chunks = store_query(
+        query_embedding=embeddings[0],
+        k=retrieve_k,
+        country=country,
+        gi_type=gi_type,
+    )
+
+    if not context_chunks:
+        return [], [], {
+            "answer": "No relevant documents found for your query.",
+            "citations": [],
+            "context_chunks": [],
+        }
+
+    context_chunks = _rerank_chunks(query, context_chunks, final_k, gi_names)
+    return context_chunks, gi_names, None

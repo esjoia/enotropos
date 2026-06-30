@@ -1,5 +1,12 @@
 """Tests for enotropos — chunking logic."""
-from winegpt.chunk import chunk_by_headings, chunk_by_paragraphs, chunk_markdown
+from winegpt.chunk import (
+    CHARS_PER_TOKEN,
+    CHUNK_SIZE_TOKENS,
+    chunk_by_headings,
+    chunk_by_paragraphs,
+    chunk_markdown,
+    chunk_parent_child,
+)
 
 
 def test_chunk_by_headings_basic() -> None:
@@ -50,3 +57,40 @@ def test_chunk_by_paragraphs_basic() -> None:
     assert "First" in chunks[0]["markdown"]
     assert "Second" in chunks[0]["markdown"]
     assert chunks[0]["section"] == "General"
+
+
+def test_chunk_markdown_splits_oversized_heading() -> None:
+    """Long sections under one heading must be split to fit the token limit."""
+    long_para = "word " * (CHUNK_SIZE_TOKENS * CHARS_PER_TOKEN)
+    md = f"## Section\n\n{long_para}\n\nAnother paragraph."
+    chunks = chunk_markdown(md)
+    assert len(chunks) >= 2
+    assert all(chunk["section"] == "Section" for chunk in chunks)
+    assert all(len(chunk["markdown"]) >= 10 for chunk in chunks)
+    # No chunk should exceed the configured token limit (with rough estimate)
+    assert all(
+        len(chunk["markdown"]) // CHARS_PER_TOKEN <= CHUNK_SIZE_TOKENS * 2
+        for chunk in chunks
+    )
+
+
+def test_chunk_parent_child_structure() -> None:
+    """Parent-Child chunking should return separate parents and children."""
+    md = "## Section A\n\n" + ("Text one. " * 50) + "\n\n## Section B\n\n" + ("Text two. " * 50)
+    parents, children = chunk_parent_child(md, "Espanya", "DOP_Rioja", "DOP_Rioja")
+
+    assert len(parents) == 2
+    assert len(children) >= 2
+
+    # Parent ids must be globally unique
+    parent_ids = {p["parent_id"] for p in parents}
+    assert len(parent_ids) == len(parents)
+    assert all(pid.startswith("Espanya__DOP_Rioja__DOP_Rioja__parent_") for pid in parent_ids)
+
+    # Every child must reference one of the parents
+    assert all(child["parent_id"] in parent_ids for child in children)
+    assert "parent_text" not in children[0]
+
+    # Parents carry full section text
+    assert "Section A" in parents[0]["markdown"]
+    assert "Section B" in parents[1]["markdown"]

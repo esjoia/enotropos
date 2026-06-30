@@ -1,71 +1,104 @@
 """enotropos — Vector store module.
 
-Manages ChromaDB for storing and querying document chunk embeddings.
+Manages ChromaDB for storing and querying child chunk embeddings. Parent
+sections are persisted separately in JSON files (see winegpt.parents) and
+loaded at query time to provide the LLM with rich, complete context.
 """
 from __future__ import annotations
 
 import logging
-from typing import Any
+import threading
+from typing import TYPE_CHECKING, Any
 
-import chromadb
+from winegpt.config import (
+    CHROMA_PATH,
+    SUPPORTED_COUNTRIES,
+    TOP_K_CHUNKS,
+)
+from winegpt.parents import delete_parents, load_parents
+from winegpt.schema import METADATA_FIELDS
 
-from winegpt.config import CHROMA_PATH, TOP_K_CHUNKS
+if TYPE_CHECKING:
+    import chromadb
 
 logger = logging.getLogger(__name__)
 
-COLLECTION_NAME = "winegpt_es"
+
+def _children_collection_name(country: str) -> str:
+    return f"{country}_children"
+
+
+_client: chromadb.PersistentClient | None = None
+_client_lock = threading.Lock()
 
 
 def get_client() -> chromadb.PersistentClient:
-    """Get a persistent ChromaDB client."""
-    CHROMA_PATH.mkdir(parents=True, exist_ok=True)
-    return chromadb.PersistentClient(path=str(CHROMA_PATH))
+    """Get a persistent ChromaDB client (thread-safe singleton)."""
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                import chromadb
+
+                CHROMA_PATH.mkdir(parents=True, exist_ok=True)
+                _client = chromadb.PersistentClient(path=str(CHROMA_PATH))
+    return _client
 
 
-def get_or_create_collection(
+def get_or_create_children_collection(
+    country: str,
     client: chromadb.PersistentClient | None = None,
 ) -> Any:
-    """Get or create the winegpt collection."""
+    """Get or create the children collection for a country."""
     if client is None:
         client = get_client()
 
-    # Delete and recreate if called with reset
+    name = _children_collection_name(country)
     try:
-        collection = client.get_collection(COLLECTION_NAME)
+        collection = client.get_collection(name)
     except Exception:
         collection = client.create_collection(
-            name=COLLECTION_NAME,
+            name=name,
             metadata={"hnsw:space": "cosine"},
         )
     return collection
 
 
-def reset_collection(client: chromadb.PersistentClient | None = None) -> None:
-    """Delete and recreate the collection."""
+def reset_children_collection(
+    country: str,
+    client: chromadb.PersistentClient | None = None,
+) -> None:
+    """Delete and recreate the children collection for a country."""
     if client is None:
         client = get_client()
+
+    name = _children_collection_name(country)
     try:
-        client.delete_collection(COLLECTION_NAME)
+        client.delete_collection(name)
     except Exception:
         pass
     client.create_collection(
-        name=COLLECTION_NAME,
+        name=name,
         metadata={"hnsw:space": "cosine"},
     )
-    logger.info("Collection '%s' reset", COLLECTION_NAME)
+    logger.info("Collection '%s' reset", name)
 
 
 def add_chunks(
     chunks: list[dict[str, Any]],
+    country: str,
     client: chromadb.PersistentClient | None = None,
 ) -> int:
-    """Add embedded chunks to ChromaDB. Returns number of chunks added."""
+    """Add embedded child chunks to a country's ChromaDB collection.
+
+    Returns number of chunks added.
+    """
     if not chunks:
         return 0
 
     if client is None:
         client = get_client()
-    collection = get_or_create_collection(client)
+    collection = get_or_create_children_collection(country, client)
 
     ids: list[str] = []
     embeddings: list[list[float]] = []
@@ -77,15 +110,12 @@ def add_chunks(
             continue
         ids.append(chunk["chunk_id"])
         embeddings.append(chunk["embedding"])
+        # Index the child (small) fragment for vector search
         documents.append(chunk["markdown"])
+        # Build metadata from the canonical field list so the Chroma schema
+        # stays aligned with the producers (single source: METADATA_FIELDS).
         metadatas.append({
-            "folder": chunk.get("folder", ""),
-            "source_file": chunk.get("source_file", ""),
-            "country": chunk.get("country", ""),
-            "gi_type": chunk.get("gi_type", ""),
-            "gi_name": chunk.get("gi_name", ""),
-            "language": chunk.get("language", ""),
-            "section": chunk.get("section", ""),
+            field: chunk.get(field, "") for field in METADATA_FIELDS
         })
 
     if not ids:
@@ -104,30 +134,23 @@ def add_chunks(
         )
         total += len(ids[batch_slice])
 
-    logger.info("Added %d chunks to ChromaDB", total)
+    logger.info("Added %d chunks to %s", total, _children_collection_name(country))
     return total
 
 
-def query(
+def _query_single_country(
     query_embedding: list[float],
-    k: int = TOP_K_CHUNKS,
-    country: str | None = None,
-    gi_type: str | None = None,
-    gi_name: str | None = None,
-    client: chromadb.PersistentClient | None = None,
+    k: int,
+    country: str,
+    gi_type: str | None,
+    gi_name: str | None,
+    client: chromadb.PersistentClient,
 ) -> list[dict[str, Any]]:
-    """Query ChromaDB for relevant chunks.
-
-    Returns list of dicts with id, document, metadata, and distance.
-    """
-    if client is None:
-        client = get_client()
-    collection = get_or_create_collection(client)
+    """Query the children collection for one country."""
+    collection = get_or_create_children_collection(country, client)
 
     where: dict[str, Any] | None = None
     conditions: list[dict[str, Any]] = []
-    if country:
-        conditions.append({"country": country})
     if gi_type:
         conditions.append({"gi_type": gi_type})
     if gi_name:
@@ -146,28 +169,115 @@ def query(
     )
 
     output: list[dict[str, Any]] = []
-    if results["ids"] and results["ids"][0]:
-        for i, chunk_id in enumerate(results["ids"][0]):
-            output.append({
-                "id": chunk_id,
-                "document": results["documents"][0][i],
-                "metadata": results["metadatas"][0][i],
-                "distance": results["distances"][0][i],
-            })
+    if not results["ids"] or not results["ids"][0]:
+        return output
+
+    for i, chunk_id in enumerate(results["ids"][0]):
+        metadata = results["metadatas"][0][i]
+        output.append({
+            "id": chunk_id,
+            "document": results["documents"][0][i],
+            "metadata": metadata,
+            "distance": results["distances"][0][i],
+        })
+
+    return output
+
+
+def query(
+    query_embedding: list[float],
+    k: int = TOP_K_CHUNKS,
+    country: str | None = None,
+    gi_type: str | None = None,
+    gi_name: str | None = None,
+    client: chromadb.PersistentClient | None = None,
+) -> list[dict[str, Any]]:
+    """Query ChromaDB for relevant chunks.
+
+    If ``country`` is None (All), queries both supported country collections
+    and merges results. Returns chunks with parent sections loaded from disk.
+    """
+    if client is None:
+        client = get_client()
+
+    countries = [country] if country else list(SUPPORTED_COUNTRIES)
+
+    # Retrieve up to k candidates per country; final reranking will trim.
+    candidates: list[dict[str, Any]] = []
+    for c in countries:
+        if c not in SUPPORTED_COUNTRIES:
+            logger.warning("Unknown country '%s', skipping", c)
+            continue
+        candidates.extend(
+            _query_single_country(
+                query_embedding,
+                k=k,
+                country=c,
+                gi_type=gi_type,
+                gi_name=gi_name,
+                client=client,
+            )
+        )
+
+    # Sort candidates by embedding distance (ascending)
+    candidates.sort(key=lambda x: x["distance"])
+
+    # Deduplicate by parent and load parent texts
+    output: list[dict[str, Any]] = []
+    seen_parents: set[str] = set()
+    parent_ids: set[str] = set()
+
+    for chunk in candidates:
+        metadata = chunk["metadata"]
+        parent_id = metadata.get("parent_id", "")
+        dedup_key = parent_id if parent_id else chunk["id"]
+
+        if dedup_key in seen_parents:
+            continue
+        seen_parents.add(dedup_key)
+
+        if parent_id:
+            parent_ids.add(parent_id)
+
+        output.append(chunk)
+        if len(output) >= k:
+            break
+
+    # Load all needed parents at once
+    parent_map = load_parents(parent_ids)
+
+    # Replace child document with parent text when available
+    for chunk in output:
+        metadata = chunk["metadata"]
+        parent_id = metadata.get("parent_id", "")
+        if parent_id and parent_id in parent_map:
+            chunk["document"] = parent_map[parent_id]["markdown"]
+            metadata["parent_section"] = parent_map[parent_id].get("section", "")
 
     return output
 
 
 def delete_by_country(country: str, client: chromadb.PersistentClient | None = None) -> int:
-    """Delete all chunks for a country. Returns count of deleted items."""
+    """Delete all children and parents for a country."""
     if client is None:
         client = get_client()
-    collection = get_or_create_collection(client)
 
-    # Get all ids matching the country filter
-    existing = collection.get(where={"country": country})
-    if existing["ids"]:
+    collection = get_or_create_children_collection(country, client)
+    existing = collection.get()
+    count = len(existing["ids"]) if existing["ids"] else 0
+    if count:
         collection.delete(ids=existing["ids"])
-        logger.info("Deleted %d chunks for %s", len(existing["ids"]), country)
-        return len(existing["ids"])
-    return 0
+        logger.info("Deleted %d chunks from %s", count, _children_collection_name(country))
+
+    delete_parents(country)
+    return count
+
+
+def reset_all_collections(client: chromadb.PersistentClient | None = None) -> None:
+    """Reset all children collections and delete all parents."""
+    if client is None:
+        client = get_client()
+
+    for country in SUPPORTED_COUNTRIES:
+        reset_children_collection(country, client)
+        delete_parents(country)
