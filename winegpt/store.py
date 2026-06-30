@@ -7,6 +7,7 @@ loaded at query time to provide the LLM with rich, complete context.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from typing import TYPE_CHECKING, Any
 
@@ -122,7 +123,7 @@ def add_chunks(
         return 0
 
     # Add in batches to avoid large requests
-    batch_size = 100
+    batch_size = int(os.getenv("CHROMA_BATCH_SIZE", "500"))
     total = 0
     for i in range(0, len(ids), batch_size):
         batch_slice = slice(i, i + batch_size)
