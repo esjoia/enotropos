@@ -110,6 +110,16 @@ def _extract_gi_names(query: str) -> list[str]:
         if len(search_name) >= 4 and search_name in query_norm:
             if underscore_name not in names:
                 names.append(underscore_name)
+            continue
+        # For multi-name GIs (e.g. "Priorat__Priorato"), also match each
+        # component individually so "Priorat" alone is detected.
+        if "__" in underscore_name:
+            for part in underscore_name.split("__"):
+                part_norm = part.lower().replace("_", " ").strip()
+                if len(part_norm) >= 4 and part_norm in query_norm:
+                    if underscore_name not in names:
+                        names.append(underscore_name)
+                    break
 
     return names
 

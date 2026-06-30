@@ -73,9 +73,12 @@ OPENCODE_GO_API_KEY = os.getenv("OPENCODE_GO_API_KEY", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "")
 
-# ---- LLM (OpenCode Go / DeepSeek V4 Flash) ----
-LLM_BASE_URL = "https://opencode.ai/zen/go/v1"
-LLM_MODEL = "deepseek-v4-flash"
+# ---- LLM (OpenCode Go / Zen) ----
+# Free models (endpoint /zen/v1): nemotron-3-ultra-free, north-mini-code-free,
+#   mimo-v2.5-free, deepseek-v4-flash-free, big-pickle
+# Paid models (endpoint /zen/go/v1): deepseek-v4-flash, deepseek-v4-pro, glm-5.2, ...
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://opencode.ai/zen/go/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-flash")
 
 # ---- Table extraction LLM (meta/llama-3.1-8b-instruct via NVIDIA NIM) ----
 TABLE_LLM_MODEL = "meta/llama-3.1-8b-instruct"
